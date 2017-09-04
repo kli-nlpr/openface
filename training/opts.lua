@@ -1,5 +1,3 @@
-local lfs = require 'lfs'
-
 local M = { }
 
 -- http://stackoverflow.com/questions/6380820/get-containing-path-of-lua-file
@@ -19,43 +17,50 @@ function M.parse(arg)
    ------------ General options --------------------
    cmd:option('-cache',
               paths.concat(script_path(), 'work'),
-              'subdirectory in which to save/log experiments')
+              'Directory to cache experiments and data.')
+   cmd:option('-save', '', 'Directory to save experiment.')
    cmd:option('-data',
               paths.concat(os.getenv('HOME'), 'openface', 'data',
                            'casia-facescrub',
                            'dlib-affine-sz:96'),
                            -- 'dlib-affine-224-split'),
-              'Home of dataset. Split into "train" and "val" directories that separate images by class.')
-   cmd:option('-manualSeed',         2, 'Manually set RNG seed')
+              'Home of dataset. Images separated by identity.')
+   cmd:option('-manualSeed', 2, 'Manually set RNG seed')
+   cmd:option('-cuda', true, 'Use cuda.')
+   cmd:option('-device', 1, 'Cuda device to use.')
+   cmd:option('-nGPU',   1,  'Number of GPUs to use by default')
+   cmd:option('-cudnn', true, 'Convert the model to cudnn.')
+   cmd:option('-cudnn_bench', false, 'Run cudnn to choose fastest option. Increase memory usage')
 
    ------------- Data options ------------------------
-   cmd:option('-nDonkeys',        2, 'number of donkeys to initialize (data loading threads)')
+   cmd:option('-nDonkeys', 2, 'number of donkeys to initialize (data loading threads)')
 
    ------------- Training options --------------------
-   cmd:option('-nEpochs',         1000, 'Number of total epochs to run')
-   cmd:option('-epochSize',       1000, 'Number of batches per epoch')
-   cmd:option('-testEpochSize',   300,  'Number of batches to test per epoch')
-   cmd:option('-epochNumber',     1,    'Manual epoch number (useful on restarts)')
-   cmd:option('-peoplePerBatch',  45,   'Number of people to sample in each mini-batch.')
-   cmd:option('-imagesPerPerson', 40,   'Number of images to sample per person in each mini-batch.')
-   cmd:option('-batchSize',   100,   'Minibatch size')
+   cmd:option('-nEpochs', 1000, 'Number of total epochs to run')
+   cmd:option('-epochSize', 250, 'Number of batches per epoch')
+   cmd:option('-epochNumber', 1, 'Manual epoch number (useful on restarts)')
+   -- GPU memory usage depends on peoplePerBatch and imagesPerPerson.
+   cmd:option('-peoplePerBatch', 15, 'Number of people to sample in each mini-batch.')
+   cmd:option('-imagesPerPerson', 20, 'Number of images to sample per person in each mini-batch.')
+   cmd:option('-testing', true, 'Test with the LFW.')
+   cmd:option('-testBatchSize', 800, 'Batch size for testing.')
+   cmd:option('-lfwDir', '../data/lfw/aligned', 'LFW aligned image directory for testing.')
 
    ---------- Model options ----------------------------------
-   cmd:option('-retrain',     'none', 'provide path to model to retrain with')
+   cmd:option('-retrain', 'none', 'provide path to model to retrain with')
    cmd:option('-modelDef', '../models/openface/nn4.def.lua', 'path to model definiton')
-   cmd:option('-imgDim', 96, 'Image dimension. nn1=224, nn4=96')
+   cmd:option('-imgDim', 96, 'Image dimension. nn2=224, nn4=96')
+   cmd:option('-embSize', 128, 'size of embedding from model')
+   cmd:option('-alpha', 0.2, 'margin in TripletLoss')
    cmd:text()
 
    local opt = cmd:parse(arg or {})
    os.execute('mkdir -p ' .. opt.cache)
-   local count = 1
-   for f in lfs.dir(opt.cache) do
-      local isDir = paths.dirp(paths.concat(opt.cache, f))
-      if f ~= "." and f ~= ".." and isDir then
-         count = count + 1
-      end
+
+   if opt.save == '' then
+      opt.save = paths.concat(opt.cache, os.date("%Y-%m-%d_%H-%M-%S"))
    end
-   opt.save = paths.concat(opt.cache, count)
+   os.execute('mkdir -p ' .. opt.save)
 
    return opt
 end

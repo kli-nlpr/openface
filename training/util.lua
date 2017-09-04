@@ -1,4 +1,4 @@
--- Source: https://github.com/facebook/fbcunn/blob/master/examples/imagenet/util.lua
+-- Source: https://github.com/soumith/imagenet-multiGPU.torch/blob/master/util.lua
 
 local ffi=require 'ffi'
 ------ Some FFI stuff used to pass storages between threads ------------------
@@ -7,7 +7,7 @@ void THFloatStorage_free(THFloatStorage *self);
 void THLongStorage_free(THLongStorage *self);
 ]]
 
-function setFloatStorage(tensor, storage_p)
+local function setFloatStorage(tensor, storage_p)
    assert(storage_p and storage_p ~= 0, "FloatStorage is NULL pointer");
    local cstorage = ffi.cast('THFloatStorage*', torch.pointer(tensor:storage()))
    if cstorage ~= nil then
@@ -17,7 +17,7 @@ function setFloatStorage(tensor, storage_p)
    tensor:cdata().storage = storage
 end
 
-function setLongStorage(tensor, storage_p)
+local function setLongStorage(tensor, storage_p)
    assert(storage_p and storage_p ~= 0, "LongStorage is NULL pointer");
    local cstorage = ffi.cast('THLongStorage*', torch.pointer(tensor:storage()))
    if cstorage ~= nil then
@@ -53,4 +53,40 @@ function receiveTensor(obj, buffer)
       error('Unknown type')
    end
    return buffer
+end
+
+--Reduce the memory consumption by model by sharing the buffers
+function optimizeNet( model, inputSize )
+   local optnet_loaded, optnet = pcall(require,'optnet')
+   if optnet_loaded then
+      local opts   = {inplace=true, mode='training', removeGradParams=false}
+      local input  = torch.rand(2,3,inputSize,inputSize)
+      if opt.cuda then
+          input = input:cuda()
+      end
+      optnet.optimizeMemory(model, input, opts)
+   else
+      print("'optnet' package not found, install it to reduce the memory consumption.")
+      print("Repo: https://github.com/fmassa/optimize-net")
+   end
+end
+
+function makeDataParallel(model, nGPU)
+   -- Wrap the model with DataParallelTable, if using more than one GPU
+   if nGPU > 1 then
+      local gpus = torch.range(1, nGPU):totable()
+      local fastest, benchmark = cudnn.fastest, cudnn.benchmark
+
+      local dpt = nn.DataParallelTable(1, true, true)
+         :add(model, gpus)
+         :threads(function()
+	    require ("dpnn")
+            local cudnn = require 'cudnn'
+            cudnn.fastest, cudnn.benchmark = fastest, benchmark
+         end)
+      dpt.gradInput = nil
+
+      model = dpt:cuda()
+   end
+   return model
 end

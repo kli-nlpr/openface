@@ -1,4 +1,4 @@
--- Copyright 2015 Carnegie Mellon University
+-- Copyright 2016 Carnegie Mellon University
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -12,74 +12,53 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-testLogger = optim.Logger(paths.concat(opt.save, 'test.log'))
+require 'io'
+require 'string'
+require 'sys'
 
-local testDataIterator = function()
-   testLoader:reset()
-   return function() return testLoader:get_batch(false) end
+local batchRepresent = "../batch-represent/main.lua"
+local lfwEval = "../evaluation/lfw.py"
+
+local testLogger = optim.Logger(paths.concat(opt.save, 'test.log'))
+
+local function getLfwAcc(fName)
+    local f = io.open(fName, 'r')
+    io.input(f)
+    local lastLine = nil
+    while true do
+    local line = io.read("*line")
+    if line == nil then break end
+    lastLine = line
+    end
+    io.close()
+    return tonumber(string.sub(lastLine, 6, 11))
 end
-
-local batchNumber
-local triplet_loss
-local timer = torch.Timer()
 
 function test()
-   print('==> doing epoch on validation data:')
-   print("==> online epoch # " .. epoch)
-
-   batchNumber = 0
-   cutorch.synchronize()
-   timer:reset()
-
-   model:evaluate()
-   model:cuda()
-
-   triplet_loss = 0
-   for i=1,opt.testEpochSize do
-      donkeys:addjob(
-         function()
-            local inputs, labels = testLoader:sampleTriplet(opt.batchSize)
-            return sendTensor(inputs)
-         end,
-         testBatch
-      )
-      if i % 5 == 0 then
-         donkeys:synchronize()
-         collectgarbage()
-      end
+   if opt.cuda then
+      model = model:float()
    end
+   local latestModelFile = paths.concat(opt.save, 'model_' .. epoch .. '.t7')
+   local outDir = paths.concat(opt.save, 'lfw-' .. epoch)
+   print(latestModelFile)
+   print(outDir)
+   local cmd = batchRepresent
+   if opt.cuda then
+      assert(opt.device ~= nil)
+      cmd = cmd .. ' -cuda -device ' .. opt.device .. ' '
+   end
+   cmd = cmd .. ' -batchSize ' .. opt.testBatchSize ..
+      ' -model ' .. latestModelFile ..
+      ' -data ' .. opt.lfwDir ..
+      ' -outDir ' .. outDir ..
+      ' -imgDim ' .. opt.imgDim
+   os.execute(cmd)
 
-   donkeys:synchronize()
-   cutorch.synchronize()
+   cmd = lfwEval .. ' Epoch' .. epoch .. ' ' .. outDir
+   os.execute(cmd)
 
-   triplet_loss = triplet_loss / opt.testEpochSize
+   lfwAcc = getLfwAcc(paths.concat(outDir, "accuracies.txt"))
    testLogger:add{
-      ['avg triplet loss (test set)'] = triplet_loss
+      ['lfwAcc'] = lfwAcc
    }
-   print(string.format('Epoch: [%d][TESTING SUMMARY] Total Time(s): %.2f \t'
-                          .. 'average triplet loss (per batch): %.2f',
-                       epoch, timer:time().real, triplet_loss))
-   print('\n')
-
-
-end
-
-local inputsCPU = torch.FloatTensor()
-local inputs = torch.CudaTensor()
-
-function testBatch(inputsThread)
-   receiveTensor(inputsThread, inputsCPU)
-   inputs:resize(inputsCPU:size()):copy(inputsCPU)
-
-   local embeddings = model:forward({
-         inputs:sub(1,opt.batchSize),
-         inputs:sub(opt.batchSize+1, 2*opt.batchSize),
-         inputs:sub(2*opt.batchSize+1, 3*opt.batchSize)})
-   local err = criterion:forward(embeddings)
-   cutorch.synchronize()
-
-   triplet_loss = triplet_loss + err
-   print(('Epoch: Testing [%d][%d/%d] Triplet Loss: %.2f'):format(epoch, batchNumber,
-                                                                  opt.testEpochSize, err))
-   batchNumber = batchNumber + 1
 end

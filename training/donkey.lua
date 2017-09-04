@@ -1,4 +1,4 @@
--- Source: https://github.com/facebook/fbcunn/blob/master/examples/imagenet/donkey.lua
+-- Source: https://github.com/soumith/imagenet-multiGPU.torch/blob/master/donkey.lua
 --
 --  Copyright (c) 2014, Facebook, Inc.
 --  All rights reserved.
@@ -18,7 +18,7 @@ ffi=require 'ffi'
 
 -- a cache file of the training metadata (if doesnt exist, will be created)
 local trainCache = paths.concat(opt.cache, 'trainCache.t7')
-local testCache = paths.concat(opt.cache, 'testCache.t7')
+-- local testCache = paths.concat(opt.cache, 'testCache.t7')
 
 -- Check for existence of opt.data
 if not os.execute('cd ' .. opt.data) then
@@ -52,7 +52,7 @@ if paths.filep(trainCache) then
 else
    print('Creating train metadata')
    trainLoader = dataLoader{
-      paths = {paths.concat(opt.data, 'train')},
+      paths = {paths.concat(opt.data)},
       loadSize = loadSize,
       sampleSize = sampleSize,
       split = 100,
@@ -76,23 +76,24 @@ end
 --------------------------------------------------------------------------------
 
 --[[ Section 2: Create a test data loader (testLoader), ]]--
-
-if paths.filep(testCache) then
-   print('Loading test metadata from cache')
-   testLoader = torch.load(testCache)
-else
-   print('Creating test metadata')
-   testLoader = dataLoader{
-      paths = {paths.concat(opt.data, 'val')},
-      loadSize = loadSize,
-      sampleSize = sampleSize,
-      -- split = 0,
-      split = 100,
-      verbose = true,
-      -- force consistent class indices between trainLoader and testLoader
-      forceClasses = trainLoader.classes
-   }
-   torch.save(testCache, testLoader)
-end
-collectgarbage()
--- End of test loader section
+-- if opt.testEpochSize > 0 then
+--   if paths.filep(testCache) then
+--     print('Loading test metadata from cache')
+--     testLoader = torch.load(testCache)
+--   else
+--     print('Creating test metadata')
+--     testLoader = dataLoader{
+--       paths = {paths.concat(opt.data, 'val')},
+--       loadSize = loadSize,
+--       sampleSize = sampleSize,
+--       -- split = 0,
+--       split = 100,
+--       verbose = true,
+--       -- force consistent class indices between trainLoader and testLoader
+--       forceClasses = trainLoader.classes
+--     }
+--     torch.save(testCache, testLoader)
+--   end
+--   collectgarbage()
+-- end
+-- -- End of test loader section

@@ -1,11 +1,9 @@
--- Source: https://github.com/facebook/fbcunn/blob/master/examples/imagenet/dataset.lua
+-- Source: https://github.com/soumith/imagenet-multiGPU.torch/blob/master/dataset.lua
 
 require 'torch'
 torch.setdefaulttensortype('torch.FloatTensor')
 local ffi = require 'ffi'
-local class = require('pl.class')
 local dir = require 'pl.dir'
-local tablex = require 'pl.tablex'
 local argcheck = require 'argcheck'
 require 'sys'
 require 'xlua'
@@ -22,7 +20,7 @@ local initcheck = argcheck{
 ]],
    {check=function(paths)
        local out = true;
-       for k,v in ipairs(paths) do
+       for _,v in ipairs(paths) do
           if type(v) ~= 'string' then
              print('paths can only be of string input');
              out = false
@@ -104,9 +102,9 @@ function dataset:__init(...)
    -- loop over each paths folder, get list of unique class names,
    -- also store the directory paths per class
    -- for each class,
-   for k,path in ipairs(self.paths) do
+   for _,path in ipairs(self.paths) do
       local dirs = dir.getdirectories(path);
-      for k,dirpath in ipairs(dirs) do
+      for _,dirpath in ipairs(dirs) do
          local class = paths.basename(dirpath)
          local idx = tableFind(self.classes, class)
          if not idx then
@@ -160,9 +158,9 @@ function dataset:__init(...)
    local tmpfile = os.tmpname()
    local tmphandle = assert(io.open(tmpfile, 'w'))
    -- iterate over classes
-   for i, class in ipairs(self.classes) do
+   for i, _ in ipairs(self.classes) do
       -- iterate over classPaths
-      for j,path in ipairs(classPaths[i]) do
+      for _,path in ipairs(classPaths[i]) do
          local command = find .. ' "' .. path .. '" ' .. findOptions
             .. ' >>"' .. classFindFiles[i] .. '" \n'
          tmphandle:write(command)
@@ -173,8 +171,8 @@ function dataset:__init(...)
    os.execute('rm -f ' .. tmpfile)
 
    print('now combine all the files to a single large file')
-   local tmpfile = os.tmpname()
-   local tmphandle = assert(io.open(tmpfile, 'w'))
+   tmpfile = os.tmpname()
+   tmphandle = assert(io.open(tmpfile, 'w'))
    -- concat all finds to a single large file in the order of self.classes
    for i=1,#self.classes do
       local command = 'cat "' .. classFindFiles[i] .. '" >>' .. combinedFindList .. ' \n'
@@ -214,16 +212,17 @@ function dataset:__init(...)
    local runningIndex = 0
    for i=1,#self.classes do
       if self.verbose then xlua.progress(i, #(self.classes)) end
-      local length = tonumber(sys.fexecute(wc .. " -l '"
+      local clsLength = tonumber(sys.fexecute(wc .. " -l '"
                                               .. classFindFiles[i] .. "' |"
                                               .. cut .. " -f1 -d' '"))
-      if length == 0 then
+      if clsLength == 0 then
          error('Class has zero samples: ' .. self.classes[i])
       else
-         self.classList[i] = torch.linspace(runningIndex + 1, runningIndex + length, length):long()
-         self.imageClass[{{runningIndex + 1, runningIndex + length}}]:fill(i)
+         -- self.classList[i] = torch.linspace(runningIndex + 1, runningIndex + clsLength, clsLength):long()
+         self.classList[i] = torch.range(runningIndex + 1, runningIndex + clsLength):long()
+         self.imageClass[{{runningIndex + 1, runningIndex + clsLength}}]:fill(i)
       end
-      runningIndex = runningIndex + length
+      runningIndex = runningIndex + clsLength
    end
 
    --==========================================================================
@@ -253,7 +252,7 @@ function dataset:__init(...)
       -- split the classList into classListTrain and classListTest
       for i=1,#self.classes do
          local list = self.classList[i]
-         local count = self.classList[i]:size(1)
+         count = self.classList[i]:size(1)
          local splitidx = math.floor((count * self.split / 100) + 0.5) -- +round
          local perm = torch.randperm(count)
          self.classListTrain[i] = torch.LongTensor(splitidx)
@@ -328,7 +327,7 @@ end
 
 -- by default, just load the image and return it
 function dataset:defaultSampleHook(imgpath)
-   local out = image.load(imgpath, self.loadSize[1])
+   local out = image.load(imgpath, 3, 'float')
    out = image.scale(out, self.sampleSize[3], self.sampleSize[2])
    return out
 end
@@ -347,147 +346,17 @@ local function tableToOutput(self, dataTable, scalarTable)
    local samplesPerDraw
    if dataTable[1]:dim() == 3 then samplesPerDraw = 1
    else samplesPerDraw = dataTable[1]:size(1) end
-   if quantity == 1 and samplesPerDraw == 1 then
-      data = dataTable[1]
-      scalarLabels = scalarTable[1]
-      labels = torch.LongTensor(#(self.classes)):fill(-1)
-      labels[scalarLabels] = 1
-   else
-      data = torch.Tensor(quantity * samplesPerDraw,
-                          self.sampleSize[1], self.sampleSize[2], self.sampleSize[3])
-      scalarLabels = torch.LongTensor(quantity * samplesPerDraw)
-      labels = torch.LongTensor(quantity * samplesPerDraw, #(self.classes)):fill(-1)
-      for i=1,#dataTable do
-         local idx = (i-1)*samplesPerDraw
-         data[{{idx+1,idx+samplesPerDraw}}]:copy(dataTable[i])
-         scalarLabels[{{idx+1,idx+samplesPerDraw}}]:fill(scalarTable[i])
-         labels[{{idx+1,idx+samplesPerDraw},{scalarTable[i]}}]:fill(1)
-      end
+   data = torch.Tensor(quantity * samplesPerDraw,
+                       self.sampleSize[1], self.sampleSize[2], self.sampleSize[3])
+   scalarLabels = torch.LongTensor(quantity * samplesPerDraw)
+   labels = torch.LongTensor(quantity * samplesPerDraw, #(self.classes)):fill(-1)
+   for i=1,#dataTable do
+      local idx = (i-1)*samplesPerDraw
+      data[{{idx+1,idx+samplesPerDraw}}]:copy(dataTable[i])
+      scalarLabels[{{idx+1,idx+samplesPerDraw}}]:fill(scalarTable[i])
+      labels[{{idx+1,idx+samplesPerDraw},{scalarTable[i]}}]:fill(1)
    end
    return data, scalarLabels, labels
-end
-
--- sampler, samples from the training set.
-function dataset:sample(quantity)
-   if self.split == 0 then
-      error('No training mode when split is set to 0')
-   end
-   quantity = quantity or 1
-   local dataTable = {}
-   local scalarTable = {}
-   for i=1,quantity do
-      local class = torch.random(1, #self.classes)
-      local out = self:getByClass(class)
-      table.insert(dataTable, out)
-      table.insert(scalarTable, class)
-   end
-   local data, scalarLabels, labels = tableToOutput(self, dataTable, scalarTable)
-   return data, scalarLabels, labels
-end
-
--- TODO: Triplet selection.
---       This naively randomly samples for triplets.
-function dataset:sampleTriplet(quantity)
-   if self.split == 0 then
-      error('No training mode when split is set to 0')
-   end
-   quantity = quantity or 1
-   local dataTable = {}
-   local scalarTable = {}
-
-   -- Anchors
-   for i=1,quantity do
-      local anchorClass = torch.random(1, #self.classes)
-      table.insert(dataTable, self:getByClass(anchorClass))
-      table.insert(scalarTable, anchorClass)
-   end
-
-   -- Positives
-   for i=1,quantity do
-      local posClass = scalarTable[i]
-      table.insert(dataTable, self:getByClass(posClass))
-      table.insert(scalarTable, posClass)
-   end
-
-   -- Negatives
-   for i=1,quantity do
-      local posClass = scalarTable[i]
-      local negClass = posClass
-      while negClass == posClass do
-         negClass = torch.random(1, #self.classes)
-      end
-      table.insert(dataTable, self:getByClass(negClass))
-      table.insert(scalarTable, negClass)
-   end
-   local data, scalarLabels, labels = tableToOutput(self, dataTable, scalarTable)
-   return data, scalarLabels, labels
-end
-
-
-function dataset:samplePeople(peoplePerBatch, imagesPerPerson)
-   if self.split == 0 then
-      error('No training mode when split is set to 0')
-   end
-
-   local classes = torch.randperm(#trainLoader.classes)[{{1,peoplePerBatch}}]:int()
-   local numPerClass = torch.Tensor(peoplePerBatch)
-   for i=1,peoplePerBatch do
-      local n = math.min(self.classListSample[classes[i]]:nElement(), imagesPerPerson)
-      numPerClass[i] = n
-   end
-
-   local data = torch.Tensor(numPerClass:sum(),
-                             self.sampleSize[1], self.sampleSize[2], self.sampleSize[3])
-
-   local dataIdx = 1
-   for i=1,peoplePerBatch do
-      local cls = classes[i]
-      local n = numPerClass[i]
-      local shuffle = torch.randperm(n)
-      for i=1,n do
-         imgNum = self.classListSample[cls][shuffle[i]]
-         imgPath = ffi.string(torch.data(self.imagePath[imgNum]))
-         data[dataIdx] = self:sampleHookTrain(imgPath)
-         dataIdx = dataIdx + 1
-      end
-   end
-   assert(dataIdx - 1 == numPerClass:sum())
-
-   return data, numPerClass
-end
-
-function dataset:sampleAllOfClass(quantity, posClass)
-   if self.split == 0 then
-      error('No training mode when split is set to 0')
-   end
-   quantity = quantity or 1
-
-   local n = math.min(self.classListSample[posClass]:nElement(), quantity)
-   local data = torch.Tensor(n, self.sampleSize[1],
-                             self.sampleSize[2], self.sampleSize[3])
-   for i=1,n do
-      imgpath = ffi.string(torch.data(self.imagePath[self.classListSample[posClass][i]]))
-      data[i] = self:sampleHookTrain(imgpath)
-   end
-
-   return data
-end
-
-function dataset:sampleNoneOfClass(quantity, posClass)
-   if self.split == 0 then
-      error('No training mode when split is set to 0')
-   end
-   quantity = quantity or 1
-   local data = torch.Tensor(quantity, self.sampleSize[1],
-                             self.sampleSize[2], self.sampleSize[3])
-   for i=1,quantity do
-      local negClass = posClass
-      while negClass == posClass do
-         negClass = torch.random(1, #self.classes)
-      end
-      data[i] = self:getByClass(negClass)
-   end
-   return data
 end
 
 function dataset:get(i1, i2)

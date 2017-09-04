@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 #
-# Copyright 2015 Carnegie Mellon University
+# Copyright 2015-2016 Carnegie Mellon University
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,17 +13,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# This implements the standard LFW verification experiment.
 
 import math
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
-from sklearn import cross_validation
 from sklearn.cross_validation import KFold
 from sklearn.metrics import accuracy_score
-from sklearn.metrics.pairwise import chi2_kernel
-from sklearn.svm import SVC
 
 import matplotlib as mpl
 mpl.use('Agg')
@@ -40,10 +39,28 @@ from scipy import arange
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--workDir', type=str, default='reps')
+    parser.add_argument(
+        'tag', type=str, help='The label/tag to put on the ROC curve.')
+    parser.add_argument('workDir', type=str,
+                        help='The work directory with labels.csv and reps.csv.')
+    pairsDefault = os.path.expanduser("~/openface/data/lfw/pairs.txt")
     parser.add_argument('--lfwPairs', type=str,
-                        default=os.path.expanduser("~/openface/data/lfw/pairs.txt"))
+                        default=os.path.expanduser(
+                            "~/openface/data/lfw/pairs.txt"),
+
+                        help='Location of the LFW pairs file from http://vis-www.cs.umass.edu/lfw/pairs.txt')
     args = parser.parse_args()
+
+    if not os.path.isfile(args.lfwPairs):
+        print("""
+Error in LFW evaluation code. (Source: <openface>/evaluation/lfw.py)
+
+The LFW evaluation requires a file containing pairs of faces to evaluate.
+Download this file from http://vis-www.cs.umass.edu/lfw/pairs.txt
+and place it in the default location ({})
+or pass it as --lfwPairs.
+""".format(pairsDefault))
+        sys.exit(-1)
 
     print("Loading embeddings.")
     fname = "{}/labels.csv".format(args.workDir)
@@ -56,8 +73,8 @@ def main():
     embeddings = dict(zip(*[paths, rawEmbeddings]))
 
     pairs = loadPairs(args.lfwPairs)
-    classifyExp(args.workDir, pairs, embeddings)
-    plotClassifyExp(args.workDir)
+    verifyExp(args.workDir, pairs, embeddings)
+    plotVerifyExp(args.workDir, args.tag)
 
 
 def loadPairs(pairsFname):
@@ -127,27 +144,35 @@ def writeROC(fname, thresholds, embeddings, pairsTest):
                 return
 
 
-def evalThresholdAccuracy(embeddings, pairs, threshold):
+def getDistances(embeddings, pairsTrain):
+    list_dist = []
     y_true = []
-    y_predict = []
-    for pair in pairs:
+    for pair in pairsTrain:
         (x1, x2, actual_same) = getEmbeddings(pair, embeddings)
         diff = x1 - x2
         dist = np.dot(diff.T, diff)
-        predict_same = dist < threshold
-        y_predict.append(predict_same)
+        list_dist.append(dist)
         y_true.append(actual_same)
+    return np.asarray(list_dist), np.array(y_true)
+
+
+def evalThresholdAccuracy(embeddings, pairs, threshold):
+    distances, y_true = getDistances(embeddings, pairs)
+    y_predict = np.zeros(y_true.shape)
+    y_predict[np.where(distances < threshold)] = 1
 
     y_true = np.array(y_true)
-    y_predict = np.array(y_predict)
     accuracy = accuracy_score(y_true, y_predict)
-    return accuracy
+    return accuracy, pairs[np.where(y_true != y_predict)]
 
 
 def findBestThreshold(thresholds, embeddings, pairsTrain):
     bestThresh = bestThreshAcc = 0
+    distances, y_true = getDistances(embeddings, pairsTrain)
     for threshold in thresholds:
-        accuracy = evalThresholdAccuracy(embeddings, pairsTrain, threshold)
+        y_predlabels = np.zeros(y_true.shape)
+        y_predlabels[np.where(distances < threshold)] = 1
+        accuracy = accuracy_score(y_true, y_predlabels)
         if accuracy >= bestThreshAcc:
             bestThreshAcc = accuracy
             bestThresh = threshold
@@ -157,7 +182,7 @@ def findBestThreshold(thresholds, embeddings, pairsTrain):
     return bestThresh
 
 
-def classifyExp(workDir, pairs, embeddings):
+def verifyExp(workDir, pairs, embeddings):
     print("  + Computing accuracy.")
     folds = KFold(n=6000, n_folds=10, shuffle=False)
     thresholds = arange(0, 4, 0.01)
@@ -174,13 +199,15 @@ def classifyExp(workDir, pairs, embeddings):
 
                 bestThresh = findBestThreshold(
                     thresholds, embeddings, pairs[train])
-                accuracy = evalThresholdAccuracy(
+                accuracy, pairs_bad = evalThresholdAccuracy(
                     embeddings, pairs[test], bestThresh)
                 accuracies.append(accuracy)
                 f.write('{}, {:0.2f}, {:0.2f}\n'.format(
                     idx, bestThresh, accuracy))
-            f.write('\navg, {:0.4f} +/- {:0.4f}\n'.format(np.mean(accuracies),
-                                                          np.std(accuracies)))
+            avg = np.mean(accuracies)
+            std = np.std(accuracies)
+            f.write('\navg, {:0.4f} +/- {:0.4f}\n'.format(avg, std))
+            print('    + {:0.4f}'.format(avg))
 
 
 def getAUC(fprs, tprs):
@@ -193,23 +220,16 @@ def getAUC(fprs, tprs):
     return np.trapz(sortedTprs, sortedFprs)
 
 
-def plotClassifyExp(workDir):
-    print("Plotting.")
-
-    fig, ax = plt.subplots(1, 1)
-
+def plotOpenFaceROC(workDir, plotFolds=True, color=None):
     fs = []
     for i in range(10):
         rocData = pd.read_csv("{}/l2-roc.fold-{}.csv".format(workDir, i))
         fs.append(interp1d(rocData['fpr'], rocData['tpr']))
         x = np.linspace(0, 1, 1000)
-        fnFoldPlot, = plt.plot(x, fs[-1](x), color='grey', alpha=0.5)
-
-    openbrData = pd.read_csv("comparisons/openbr.v1.1.0.DET.csv")
-    openbrData['Y'] = 1 - openbrData['Y']
-    # brPlot = openbrData.plot(x='X', y='Y', legend=True, ax=ax)
-    brPlot, = plt.plot(openbrData['X'], openbrData['Y'])
-    brAUC = getAUC(openbrData['X'], openbrData['Y'])
+        if plotFolds:
+            foldPlot, = plt.plot(x, fs[-1](x), color='grey', alpha=0.5)
+        else:
+            foldPlot = None
 
     fprs = []
     tprs = []
@@ -223,8 +243,26 @@ def plotClassifyExp(workDir):
         tpr /= 10.0
         fprs.append(fpr)
         tprs.append(tpr)
-    fnMeanPlot, = plt.plot(fprs, tprs)
-    fnAUC = getAUC(fprs, tprs)
+    if color:
+        meanPlot, = plt.plot(fprs, tprs, color=color)
+    else:
+        meanPlot, = plt.plot(fprs, tprs)
+    AUC = getAUC(fprs, tprs)
+    return foldPlot, meanPlot, AUC
+
+
+def plotVerifyExp(workDir, tag):
+    print("Plotting.")
+
+    fig, ax = plt.subplots(1, 1)
+
+    openbrData = pd.read_csv("comparisons/openbr.v1.1.0.DET.csv")
+    openbrData['Y'] = 1 - openbrData['Y']
+    # brPlot = openbrData.plot(x='X', y='Y', legend=True, ax=ax)
+    brPlot, = plt.plot(openbrData['X'], openbrData['Y'])
+    brAUC = getAUC(openbrData['X'], openbrData['Y'])
+
+    foldPlot, meanPlot, AUC = plotOpenFaceROC(workDir, color='k')
 
     humanData = pd.read_table(
         "comparisons/kumar_human_crop.txt", header=None, sep=' ')
@@ -237,24 +275,25 @@ def plotClassifyExp(workDir):
                        alpha=0.75)
     deepfaceAUC = getAUC(deepfaceData[1], deepfaceData[0])
 
-    baiduData = pd.read_table(
-        "comparisons/BaiduIDLFinal.TPFP", header=None, sep=' ')
-    bPlot, = plt.plot(baiduData[1], baiduData[0])
-    baiduAUC = getAUC(baiduData[1], baiduData[0])
+    # baiduData = pd.read_table(
+    #     "comparisons/BaiduIDLFinal.TPFP", header=None, sep=' ')
+    # bPlot, = plt.plot(baiduData[1], baiduData[0])
+    # baiduAUC = getAUC(baiduData[1], baiduData[0])
 
     eigData = pd.read_table(
         "comparisons/eigenfaces-original-roc.txt", header=None, sep=' ')
     eigPlot, = plt.plot(eigData[1], eigData[0])
     eigAUC = getAUC(eigData[1], eigData[0])
 
-    ax.legend([humanPlot, bPlot, dfPlot, brPlot, eigPlot, fnMeanPlot, fnFoldPlot],
+    ax.legend([humanPlot, dfPlot, brPlot, eigPlot,
+               meanPlot, foldPlot],
               ['Human, Cropped [AUC={:.3f}]'.format(humanAUC),
-               'Baidu [{:.3f}]'.format(baiduAUC),
+               # 'Baidu [{:.3f}]'.format(baiduAUC),
                'DeepFace Ensemble [{:.3f}]'.format(deepfaceAUC),
                'OpenBR v1.1.0 [{:.3f}]'.format(brAUC),
-               'Eigenfaces (img-restrict) [{:.3f}]'.format(eigAUC),
-               'OpenFace nn4.v1 [{:.3f}]'.format(fnAUC),
-               'OpenFace nn4.v1 folds'],
+               'Eigenfaces [{:.3f}]'.format(eigAUC),
+               'OpenFace {} [{:.3f}]'.format(tag, AUC),
+               'OpenFace {} folds'.format(tag)],
               loc='lower right')
 
     plt.plot([0, 1], color='k', linestyle=':')
@@ -267,7 +306,8 @@ def plotClassifyExp(workDir):
     plt.grid(b=True, which='major', color='k', linestyle='-')
     plt.grid(b=True, which='minor', color='k', linestyle='-', alpha=0.2)
     plt.minorticks_on()
-    fig.savefig(os.path.join(workDir, "roc.pdf"))
+    # fig.savefig(os.path.join(workDir, "roc.pdf"))
+    fig.savefig(os.path.join(workDir, "roc.png"))
 
 if __name__ == '__main__':
     main()

@@ -1,6 +1,6 @@
 #!/usr/bin/env th
 --
--- Copyright 2015 Carnegie Mellon University
+-- Copyright 2015-2016 Carnegie Mellon University
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -15,11 +15,6 @@
 -- limitations under the License.
 
 
--- Warning: This is very unstable!
--- Please join us in improving it at:
---   https://github.com/cmusatyalab/openface/issues/1
---   https://github.com/cmusatyalab/openface/issues/4
-
 require 'torch'
 require 'nn'
 require 'dpnn'
@@ -27,6 +22,12 @@ require 'image'
 
 io.stdout:setvbuf 'no'
 torch.setdefaulttensortype('torch.FloatTensor')
+
+-- OpenMP-acceleration causes slower performance. Related issues:
+-- https://groups.google.com/forum/#!topic/cmu-openface/vqkkDlbfWZw
+-- https://github.com/torch/torch7/issues/691
+-- https://github.com/torch/image/issues/7
+torch.setnumthreads(1)
 
 local cmd = torch.CmdLine()
 cmd:text()
@@ -60,9 +61,9 @@ while true do
    -- as a CSV.
    local imgPath = io.read("*line")
    if imgPath and imgPath:len() ~= 0 then
-      img[1] = image.load(imgPath, opt.imgDim)
+      img[1] = image.load(imgPath, 3, 'float')
       img[1] = image.scale(img[1], opt.imgDim, opt.imgDim)
-      local rep = nil
+      local rep
       if opt.cuda then
          imgCuda:copy(img)
          rep = net:forward(imgCuda):float()

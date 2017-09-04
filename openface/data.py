@@ -1,4 +1,6 @@
-# Copyright 2015 Carnegie Mellon University
+# coding=utf8
+#
+# Copyright 2015-2016 Carnegie Mellon University
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,41 +14,101 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Module for image data."""
+
 import os
 
-from skimage import io
+import cv2
 
 
 class Image:
+    """Object containing image metadata."""
 
     def __init__(self, cls, name, path):
+        """
+        Instantiate an 'Image' object.
+
+        :param cls: The image's class; the name of the person.
+        :type cls: str
+        :param name: The image's name.
+        :type name: str
+        :param path: Path to the image on disk.
+        :type path: str
+        """
+        assert cls is not None
+        assert name is not None
+        assert path is not None
+
         self.cls = cls
         self.name = name
         self.path = path
-        self.rgb = None
 
-    def getRGB(self, cache=False):
-        if self.rgb is not None:
-            return self.rgb
+    def getBGR(self):
+        """
+        Load the image from disk in BGR format.
+
+        :return: BGR image. Shape: (height, width, 3)
+        :rtype: numpy.ndarray
+        """
+        try:
+            bgr = cv2.imread(self.path)
+        except:
+            bgr = None
+        return bgr
+
+    def getRGB(self):
+        """
+        Load the image from disk in RGB format.
+
+        :return: RGB image. Shape: (height, width, 3)
+        :rtype: numpy.ndarray
+        """
+        bgr = self.getBGR()
+        if bgr is not None:
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         else:
-            try:
-                rgb = io.imread(self.path)
-            except:
-                rgb = None
-            if cache:
-                self.rgb = rgb
-            return rgb
+            rgb = None
+        return rgb
 
     def __repr__(self):
+        """String representation for printing."""
         return "({}, {})".format(self.cls, self.name)
 
 
-def iterImgs(d):
-    exts = [".jpg", ".png"]
+def iterImgs(directory):
+    u"""
+    Iterate through the images in a directory.
 
-    for subdir, dirs, files in os.walk(d):
+    The images should be organized in subdirectories
+    named by the image's class (who the person is)::
+
+       $ tree directory
+       person-1
+       ├── image-1.jpg
+       ├── image-2.png
+       ...
+       └── image-p.png
+
+       ...
+
+       person-m
+       ├── image-1.png
+       ├── image-2.jpg
+       ...
+       └── image-q.png
+
+
+    :param directory: The directory to iterate through.
+    :type directory: str
+    :return: An iterator over Image objects.
+    """
+    assert directory is not None
+
+    exts = [".jpg", ".jpeg", ".png"]
+
+    for subdir, dirs, files in os.walk(directory):
         for path in files:
             (imageClass, fName) = (os.path.basename(subdir), path)
             (imageName, ext) = os.path.splitext(fName)
-            if ext in exts:
+            if ext.lower() in exts:
                 yield Image(imageClass, imageName, os.path.join(subdir, fName))

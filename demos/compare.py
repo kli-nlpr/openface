@@ -4,7 +4,7 @@
 # Brandon Amos
 # 2015/09/29
 #
-# Copyright 2015 Carnegie Mellon University
+# Copyright 2015-2016 Carnegie Mellon University
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 import time
 
 start = time.time()
+
 import argparse
 import cv2
 import itertools
@@ -29,14 +30,9 @@ import os
 import numpy as np
 np.set_printoptions(precision=2)
 
-import sys
-fileDir = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(os.path.join(fileDir, ".."))
-
 import openface
-import openface.helper
-from openface.data import iterImgs
 
+fileDir = os.path.dirname(os.path.realpath(__file__))
 modelDir = os.path.join(fileDir, '..', 'models')
 dlibModelDir = os.path.join(modelDir, 'dlib')
 openfaceModelDir = os.path.join(modelDir, 'openface')
@@ -44,34 +40,23 @@ openfaceModelDir = os.path.join(modelDir, 'openface')
 parser = argparse.ArgumentParser()
 
 parser.add_argument('imgs', type=str, nargs='+', help="Input images.")
-parser.add_argument('--dlibFaceMean', type=str, help="Path to dlib's face predictor.",
-                    default=os.path.join(dlibModelDir, "mean.csv"))
 parser.add_argument('--dlibFacePredictor', type=str, help="Path to dlib's face predictor.",
                     default=os.path.join(dlibModelDir, "shape_predictor_68_face_landmarks.dat"))
-parser.add_argument('--dlibRoot', type=str,
-                    default=os.path.expanduser(
-                        "~/src/dlib-18.16/python_examples"),
-                    help="dlib directory with the dlib.so Python library.")
 parser.add_argument('--networkModel', type=str, help="Path to Torch network model.",
-                    default=os.path.join(openfaceModelDir, 'nn4.v1.t7'))
+                    default=os.path.join(openfaceModelDir, 'nn4.small2.v1.t7'))
 parser.add_argument('--imgDim', type=int,
                     help="Default image dimension.", default=96)
-parser.add_argument('--cuda', action='store_true')
 parser.add_argument('--verbose', action='store_true')
 
 args = parser.parse_args()
 
-sys.path.append(args.dlibRoot)
-import dlib
-
-from openface.alignment import NaiveDlib  # Depends on dlib.
 if args.verbose:
     print("Argument parsing and loading libraries took {} seconds.".format(
         time.time() - start))
 
 start = time.time()
-align = NaiveDlib(args.dlibFaceMean, args.dlibFacePredictor)
-net = openface.TorchWrap(args.networkModel, imgDim=args.imgDim, cuda=args.cuda)
+align = openface.AlignDlib(args.dlibFacePredictor)
+net = openface.TorchNeuralNet(args.networkModel, args.imgDim)
 if args.verbose:
     print("Loading the dlib and OpenFace models took {} seconds.".format(
         time.time() - start))
@@ -80,28 +65,31 @@ if args.verbose:
 def getRep(imgPath):
     if args.verbose:
         print("Processing {}.".format(imgPath))
-    img = cv2.imread(imgPath)
-    if img is None:
+    bgrImg = cv2.imread(imgPath)
+    if bgrImg is None:
         raise Exception("Unable to load image: {}".format(imgPath))
+    rgbImg = cv2.cvtColor(bgrImg, cv2.COLOR_BGR2RGB)
+
     if args.verbose:
-        print("  + Original size: {}".format(img.shape))
+        print("  + Original size: {}".format(rgbImg.shape))
 
     start = time.time()
-    bb = align.getLargestFaceBoundingBox(img)
+    bb = align.getLargestFaceBoundingBox(rgbImg)
     if bb is None:
         raise Exception("Unable to find a face: {}".format(imgPath))
     if args.verbose:
         print("  + Face detection took {} seconds.".format(time.time() - start))
 
     start = time.time()
-    alignedFace = align.alignImg("affine", args.imgDim, img, bb)
+    alignedFace = align.align(args.imgDim, rgbImg, bb,
+                              landmarkIndices=openface.AlignDlib.OUTER_EYES_AND_NOSE)
     if alignedFace is None:
         raise Exception("Unable to align image: {}".format(imgPath))
     if args.verbose:
         print("  + Face alignment took {} seconds.".format(time.time() - start))
 
     start = time.time()
-    rep = net.forwardImage(alignedFace)
+    rep = net.forward(alignedFace)
     if args.verbose:
         print("  + OpenFace forward pass took {} seconds.".format(time.time() - start))
         print("Representation:")
@@ -112,4 +100,5 @@ def getRep(imgPath):
 for (img1, img2) in itertools.combinations(args.imgs, 2):
     d = getRep(img1) - getRep(img2)
     print("Comparing {} with {}.".format(img1, img2))
-    print("  + Squared l2 distance between representations: {}".format(np.dot(d, d)))
+    print(
+        "  + Squared l2 distance between representations: {:0.3f}".format(np.dot(d, d)))
